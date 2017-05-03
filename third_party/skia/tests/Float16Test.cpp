@@ -1,0 +1,105 @@
+/*
+ * Copyright 2016 Google Inc.
+ *
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
+
+#include "Test.h"
+#include "SkAutoPixmapStorage.h"
+#include "SkColor.h"
+#include "SkHalf.h"
+#include "SkOpts.h"
+#include "SkPixmap.h"
+#include "SkPM4f.h"
+#include "SkRandom.h"
+
+static bool eq_within_half_float(float a, float b) {
+    const float kTolerance = 1.0f / (1 << (8 + 10));
+
+    SkHalf ha = SkFloatToHalf(a);
+    SkHalf hb = SkFloatToHalf(b);
+    float a2 = SkHalfToFloat(ha);
+    float b2 = SkHalfToFloat(hb);
+    return fabsf(a2 - b2) <= kTolerance;
+}
+
+static bool eq_within_half_float(const SkPM4f& a, const SkPM4f& b) {
+    for (int i = 0; i < 4; ++i) {
+        if (!eq_within_half_float(a.fVec[i], b.fVec[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+DEF_TEST(color_half_float, reporter) {
+    const int w = 100;
+    const int h = 100;
+
+    SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_F16_SkColorType, kPremul_SkAlphaType);
+
+    SkAutoPixmapStorage pm;
+    pm.alloc(info);
+    REPORTER_ASSERT(reporter, pm.getSafeSize() == SkToSizeT(w * h * sizeof(uint64_t)));
+
+    SkColor4f c4 { 1, 0.5f, 0.25f, 0.5f };
+    pm.erase(c4);
+
+    SkPM4f origpm4 = c4.premul();
+    for (int y = 0; y < pm.height(); ++y) {
+        for (int x = 0; x < pm.width(); ++x) {
+            SkPM4f pm4 = SkPM4f::FromF16(pm.addrF16(x, y));
+            REPORTER_ASSERT(reporter, eq_within_half_float(origpm4, pm4));
+        }
+    }
+}
+
+static uint32_t u(float f) {
+    uint32_t x;
+    memcpy(&x, &f, 4);
+    return x;
+}
+
+DEF_TEST(HalfToFloat_finite, r) {
+    for (uint32_t h = 0; h <= 0xffff; h++) {
+        float f = SkHalfToFloat(h);
+        if (isfinite(f)) {
+            float got = SkHalfToFloat_finite(h)[0];
+            if (got != f) {
+                SkDebugf("0x%04x -> 0x%08x (%g), want 0x%08x (%g)\n",
+                        h,
+                        u(got), got,
+                        u(f), f);
+            }
+            REPORTER_ASSERT(r, SkHalfToFloat_finite(h)[0] == f);
+            uint64_t result;
+            SkFloatToHalf_finite(SkHalfToFloat_finite(h)).store(&result);
+            REPORTER_ASSERT(r, result == h);
+        }
+    }
+}
+
+DEF_TEST(FloatToHalf_finite, r) {
+#if 0
+    for (uint64_t bits = 0; bits <= 0xffffffff; bits++) {
+#else
+    SkRandom rand;
+    for (int i = 0; i < 1000000; i++) {
+        uint32_t bits = rand.nextU();
+#endif
+        float f;
+        memcpy(&f, &bits, 4);
+        if (isfinite(f) && isfinite(SkHalfToFloat(SkFloatToHalf(f)))) {
+            uint16_t h1 = SkFloatToHalf_finite(Sk4f(f,0,0,0))[0],
+                     h2 = SkFloatToHalf(f);
+            bool ok = (h1 == h2 || h1 == h2-1);
+            REPORTER_ASSERT(r, ok);
+            if (!ok) {
+                SkDebugf("%08x (%g) -> %04x, want %04x (%g)\n",
+                         bits, f, h1, h2, SkHalfToFloat(h2));
+                break;
+            }
+        }
+    }
+}
